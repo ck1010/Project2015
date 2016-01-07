@@ -1,0 +1,390 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%  
+%%  The following code implements a basic actor-critic agent solving a simple
+%%  reinforcement learning task.  The agent is a moving point in a one-dimentional
+%%  space.  The space contains a discrete number of states disposed on a line.
+%%  The reward is a point positioned in the centre of the space (in the state being in
+%%  the middle of the line).  
+%%  
+%%   _______________________________________________________________________________
+%%  |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   | 
+%%  |   |   |   |   | a |   |   |   |   | R |   |   |   |   |   |   |   |   |   |   | 
+%%  |___|___|___|___|___|___|___|___|___|___|___|___|___|___|___|___|___|___|___|___|
+%%                   / \                 / \
+%%                    |__ agent           |__ reward
+%%  
+%%  The actor-critic agent is composed of two perceptrons, an actor and an evaluator :
+%%      
+%%                                      ______
+%%                                     /      \
+%%                                    /        \
+%%             noise-----> Action    /      tde o <--------- R  
+%%                           ^       |          ^^
+%%                           |       |      +g /  \ -1 
+%%                           |       |        /    \
+%%                         a o       |     v o----->o v-prev
+%%                           ^       .       ^
+%%                           |      / \      |
+%%                           |<----/   \---->|
+%%                          /|              /|
+%%   P   1 o---------------//|-------------//|
+%% A O   2 o---------------//|-------------//|
+%% G S   3 o---------------/ |-------------/ |
+%% E I   .     . .  . .  .   | . .  . .  .   |
+%% N T                      /|              /|
+%% T I  18 o---------------///-------------///
+%%   O  19 o---------------//--------------//
+%%   N  20 o---------------/---------------/
+%%      
+%%  
+%%  
+%%  
+%%
+%%
+%% The actor outputs values in the interval [0,1], where values below .5
+%% correspond to a "go-to-the-right" action whereas values above .5 correspond to
+%% a "go-to-the-left" action. A noise is added to the output so as to make 
+%% the the choice stochastic.
+%% 
+%%
+%% Pseudo-code:
+%% 
+%%
+%%
+%% initialize actor_weights, evaluator_weights, action, 
+%%            current_evaluation, previous_evaluation, 
+%%            current_position, previous_position, tderror 
+%%            to 0
+%% 
+%% initialize reward_position 
+%% 
+%% for each trial in trials
+%% 
+%%   initialize current_evaluation, previous_evaluation, tderror to 0
+%%   set current_position to a random value != reward_position
+%%
+%%   for each timestep in trial
+%%
+%%     calc action (actor's output + noise)
+%%     calc current_position based on action
+%%     calc current_evaluation
+%%     calc tderror
+%%     update actor_weights
+%%     update evaluator_weights
+%%     store current_position as previous_position 
+%%     store current_evaluation as previous_evaluation 
+%%   
+%%   end 
+%% 
+%% end
+%%
+%%
+%% initialize actor_weights, 
+%%            evaluator_weights, 
+%%            action, 
+%%            current_evaluation, 
+%%            previous_evaluation, 
+%%            current_position, 
+%%            previous_position, 
+%%            tderror 
+%%            to 0
+%%
+%% inizialize noise_sd = max_noise_sd
+%% 
+%% initialize reward_position 
+%% 
+%% for each trial in trials
+%% 
+%%   initialize current_evaluation, 
+%%              previous_evaluation, 
+%%              tderror 
+%%              to 0
+%%
+%%   set ( current_position = random value ) != reward_position
+%%
+%%   for each timestep in trial
+%%
+%%     noise  = noise_sd*randn
+%%     action = sigmoid(actor_weights*previous_position)
+%%    
+%%     current_position   = action + noise
+%%     current_evaluation = evaluator_weights*current_position
+%%
+%%     tderror = current_reward + 
+%%               gamma*current_evaluation -
+%%               previous_evaluation
+%%  
+%%     actor_weights     += actor_learning_rate*
+%%                          tderror*
+%%                          noise*
+%%                          derivative(action)*
+%%                          previous_position 
+%%
+%%     evaluator_weights += evaluator_learning_rate*
+%%                          tderror*
+%%                          previous_position
+%%     
+%%     noise_sd  -= noise_decay 
+%%     
+%%     previous_position    = current_position
+%%     previous_evaluation = current_evaluation 
+%%   
+%%   end 
+%% 
+%% end
+%%  
+%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function rla()
+
+close all;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% CONSTANTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+STATES = 20;                   % number of states in 
+                               % the space of the agent.
+                               %
+T      = 1000;                 % number of trials
+                               %
+E      = 20;                   % maximum number of steps 
+                               % in a trial
+                               %
+TSTEPS = T*E;                  % total number of steps
+                               %
+Na     = 1;                    % number of actuators
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% VARIABLES %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+v      = 0;                    % evaluation at time t
+v_prev = 0;                    % evaluation at time t-1
+tde      = 0;                  % TD error
+a      = zeros(Na,1);          % action units
+pos    = zeros(STATES,1);      % current position 
+ppath  = zeros(STATES,E);      % history of positions in a trial
+spath  = zeros(STATES,E);      % history of surprise (TD error) in a trial
+sd     =  .1;                  % initial standard deviation
+                               % of noise distribution
+noisev = sd;                   % standard deviation of
+                               % noise distribution
+
+w_v    = zeros(1,STATES);      % evaluation weights
+w_a    = zeros(Na,STATES);     % action weights
+
+r      = zeros(1,STATES);      % reward is zero over all pose steps
+r(ceil(STATES/2)) = 1;         % except for the middle 
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% PARAMETERS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+g      = .99;                      % discount factor of the current evaluation
+lre    = .08;                      % learning rate of the evaluator
+lra    = .08;                      % learning rate of the actor
+lnv    =  sd/((T*E)*(1./4.));      % decay rate of the standard deviation of noise
+                                   % we set it so that it decrease to 0 in one fourth 
+                                   % of the simulation time (T*E is the total number
+                                   % of timesteps)
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% MAIN LOOP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%
+%% Start of the simulation 
+%% (loop through the trials).
+%%
+for trials = 1:T  
+  
+  %%
+  %% Begin of trial
+  %%
+
+  % Reset variables
+  v        = 0;
+  a        = 0;
+  v_prev   = 0;
+  pos_prev = 0; 
+  ppath     = ppath*0;
+  spath     = spath*0;
+  
+  % Set the  initial position index 
+  % to a random value  (different from 
+  % the reward position).
+  posidx = ceil(rand*STATES);    % get a random value 
+                                 % in the interval 1:STATES.
+  while posidx == find(r==1)     % Verify that posidx is not
+                                 % the middle position.
+    posidx = ceil(rand*STATES);  % In case it is in the reward 
+                                 % position get another
+  end                            % random value.
+
+  % Calculate the current position using the 
+  % position index.
+  pos = 1*( (1:STATES) == posidx )'; % return a vector of ones 
+                                     % and zeros (one := the value 
+                                     % in the vector is equal to  
+                                     % posidx, zero:= otherwise )
+
+  % Store the initial position in ppath.
+  ppath(:,1) = pos;
+
+  % At the beginning the previous position 
+  % is set as the same as the initial position.
+  posidx_prev = posidx;
+  pos_prev    = pos;
+   
+  %%
+  %% Start of the trial (loop through 
+  %% the timesteps).
+  %%
+  for t=2:E
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%% Spreading %%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+   
+    %%%%%%%%%%%%%% 
+    % action %%%%%
+    %%%%%%%%%%%%%%
+
+    a_ws    = w_a*pos;            % Weighted sum of the inputs.
+    a_fun   = sigmoid(a_ws );     % Transfer function.
+    a_noise = noisev*randn;       % Gaussian noise. 
+    a       = a_fun + a_noise;    % Real activation (stochastic).
+    
+    % update position
+    posidx    = posidx +  ( 2*( a>.5 ) -1 );         % Add +1 if a>.5, to the 
+                                                     % current position -1 otherwise.
+                                                     % 
+    posidx    = max( 1 , min( STATES , posidx ) );   % Control if the index is out 
+                                                     % of the [1 STATES] bounds.
+    
+    pos       = ( (1:STATES) == posidx )';           % Calculate position on the state vector.
+    ppath(:,t) = pos;                                 % Store current position in ppath.
+    
+    %%%%%%%%%%%%%% 
+    % evaluation %
+    %%%%%%%%%%%%%% 
+    v = w_v*pos;  % current evaluation (weighted sum).
+       
+    
+    %%%%%%%%%%%%%% 
+    % TD error %%%
+    %%%%%%%%%%%%%%
+    tde = r(posidx) + g*v - v_prev; % TD error.
+    
+    spath(:,t) = tde*pos;
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%% Learning %%%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    %%%%%%%%%%%%%%%%%% 
+    %% Eval learning %
+    %%%%%%%%%%%%%%%%%%           
+    w_v = w_v  +    ...% Update the evaluator weights.
+                    ...%  
+       lre *        ...% learning rate
+       tde *        ...% TD error 
+       pos_prev';   ...% input at previous time
+
+    %%%%%%%%%%%%%%%%%%%   
+    %% Actor learning %
+    %%%%%%%%%%%%%%%%%%% 
+    err = a - a_fun;             % noise: error between the programmed 
+                                 % action and the real action.
+                                 %
+    w_a = w_a +               ...% Update the actor weights.
+       lra *                  ...% learning rate
+       tde *                    ...% TD error
+       err *                  ...% noise
+       a_fun*(1-a_fun) *      ...% derivative of the output of the actor
+       pos_prev';             ...% input at previous time
+
+    noisev = max(0,noisev - lnv);   % decay of noise standard deviation
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%% Update prevs %%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    v_prev    = v;   % store evaluation 
+    pos_prev  = pos; % store position
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%% Plotting %%%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    rows = 32;
+
+    figure(1);
+    axes('position', [0 0 1 1]);
+
+    %% plot the current position
+    subplot(rows,1,1:2);
+    imagesc(pos',[0 1]);
+    axis off;
+
+    %% plot the evaluator weights  
+    subplot(rows,1,3:4);
+    imagesc(w_v,[-1 1]);
+    axis off;
+    
+    %% plot the actor weights  
+    subplot(rows,1,5:6);
+    imagesc(w_a,[-.1 .1]);
+    axis off;
+    
+    %% plot the current noise stddev (full=sd, empty:=0)
+    subplot(rows,1,7:8);
+    imagesc( linspace(0,sd,100)<noisev ,[0 .2]);
+    axis off;
+    
+    % plot the hystory of position during the trial
+    subplot(rows,1,9:19);
+    imagesc(ppath');
+    axis off;
+ 
+    % plot the hystory of surprise (TD error) during the trial
+    subplot(rows,1,20:30);
+    imagesc(spath',[-1,1]);
+    axis off;
+   
+    % plot the timeline of the whole simulation
+    subplot(rows,1,31:32);
+    imagesc((T:-1:1)>trials);
+    axis off;
+
+    colormap gray; % use grayscale colors 
+    drawnow; % redraw before the next iteration
+
+    % if the reward is reached reset 
+    % to the next iteration 
+    if r(posidx)>0; break; end
+
+  end
+end
+
+
+function y = sigmoid(x)
+y = 1./(1+exp(-x));
